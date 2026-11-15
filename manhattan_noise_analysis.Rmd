@@ -1,0 +1,390 @@
+---
+title: "Final Project: Analysis of Residential Noise Complaints in Manhattan"
+author: "Minister Delight & FNU Himanshi"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+latex_engine: xelatex
+fontsize: 11pt
+geometry: margin=1in
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(readr)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(tidyr)
+library(knitr)
+```
+
+# Abstract
+
+This project analyzes residential noise complaints in Manhattan using NYC 311 service request data. The purpose of the analysis is to determine whether time-based factors, including hour of day, day of week, and season, are associated with changes in residential noise complaint volume. The dataset contains individual complaint records, and the analysis converts those records into count data for statistical modeling. Because the data were collected from naturally occurring resident reports rather than from a controlled experiment, this is an observational study.
+
+The dependent variable is the number of residential noise complaints. The main independent variables are hour of day, day of week, and season. Exploratory data analysis is used to summarize complaint patterns, and visualizations show complaint volume by hour, weekday, season, and the combined relationship between weekday and hour. Since the response variable is a count, Poisson regression is used to model expected complaint counts.
+
+The results show clear temporal patterns. Complaints are more common during late evening hours and on weekends, especially Saturday and Sunday. The regression output supports the conclusion that time-based variables are statistically associated with complaint counts. These findings are useful because they may help city agencies understand when residential noise complaints are most likely to occur. However, because this is an observational study, the results identify associations but do not prove causation.
+
+# Overview
+
+- **Topic:** Residential noise complaints in Manhattan
+- **Dataset:** NYC 311 service request data
+- **Study type:** Observational study
+- **Dependent variable:** Number of complaints
+- **Independent variables:** Hour of day, day of week, and season
+- **Main method:** Exploratory data analysis and Poisson regression
+
+# Introduction
+
+Residential noise is an important quality-of-life issue in dense urban environments. In Manhattan, residential noise complaints may reflect patterns in nightlife, household activity, building density, and resident reporting behavior. Understanding when complaints are most likely to occur can help city agencies plan staffing and response strategies.
+
+## Research Question
+
+How do time-based factors such as hour of day, day of week, and season influence the number of residential noise complaints in Manhattan?
+
+## Importance of the Analysis
+
+This analysis is important because it identifies predictable complaint patterns. If complaints are concentrated during certain hours or days, city agencies may be able to allocate resources more efficiently. The analysis also demonstrates how public complaint data can be used to understand urban quality-of-life concerns.
+
+# Context on the Data Collection
+
+The data come from NYC 311 service requests. Residents submit complaints through phone calls, websites, and mobile applications. Many residential noise complaints are handled by the NYPD.
+
+This is an observational study because no treatment was assigned, no variables were manipulated, and the analysis is based on real complaints that occurred naturally. Therefore, this project can identify patterns and associations, but it cannot prove that time itself causes complaint volume to increase or decrease.
+
+# Data Source
+
+- **Source:** NYC Open Data. 311 Service Requests from 2010 to Present.
+- **Website:** https://data.cityofnewyork.us/Social-Services/311-Service-Requests-from-2010-to-Present/erm2-nwe9
+- **Dataset used:** Uploaded CSV file containing Manhattan residential noise complaints
+
+# Load and Prepare the Data
+
+```{r load-data}
+file_name <- if (file.exists("dataset_raw.csv")) {
+  "dataset_raw.csv"
+} else if (file.exists("dataset_raw(1).csv")) {
+  "dataset_raw(1).csv"
+} else {
+  stop("Dataset file not found. Please keep dataset_raw.csv or dataset_raw(1).csv in the working directory.")
+}
+
+noise_data <- read_csv(file_name, show_col_types = FALSE)
+
+dim(noise_data)
+```
+
+The cases in this project are individual Manhattan residential noise complaint records submitted to NYC 311. Each row represents one complaint. The dataset contains `r nrow(noise_data)` observations and `r ncol(noise_data)` variables before feature engineering.
+
+## Preview of Relevant Columns
+
+```{r preview-columns}
+noise_data %>%
+  select(`Created Date`, `Problem (formerly Complaint Type)`, `Problem Detail (formerly Descriptor)`) %>%
+  head(6) %>%
+  kable(caption = "Preview of Relevant Raw Columns")
+```
+
+## Feature Engineering
+
+The original dataset contains complaint-level records. To analyze time patterns, the `Created Date` field is converted into a date-time variable. New variables are then created for hour of day, day of week, month, and season.
+
+```{r feature-engineering}
+day_levels <- c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+season_levels <- c("Winter", "Spring", "Summer", "Fall")
+
+noise_data <- noise_data %>%
+  mutate(
+    Created_Date = mdy_hms(`Created Date`),
+    hour = hour(Created_Date),
+    day_of_week = wday(Created_Date, label = TRUE, abbr = FALSE, week_start = 1),
+    day_of_week = factor(as.character(day_of_week), levels = day_levels),
+    month_num = month(Created_Date),
+    month = month(Created_Date, label = TRUE, abbr = FALSE),
+    season = case_when(
+      month_num %in% c(12, 1, 2) ~ "Winter",
+      month_num %in% c(3, 4, 5) ~ "Spring",
+      month_num %in% c(6, 7, 8) ~ "Summer",
+      TRUE ~ "Fall"
+    ),
+    season = factor(season, levels = season_levels),
+    date = as.Date(Created_Date)
+  )
+
+noise_data %>%
+  select(`Created Date`, Created_Date, hour, day_of_week, month, season) %>%
+  head(6) %>%
+  kable(caption = "Preview of Engineered Time Variables")
+```
+
+# Variables
+
+## Dependent Variable
+
+The dependent variable is the **number of residential noise complaints**. This is a numerical count variable.
+
+## Independent Variables
+
+The main independent variables are:
+
+- **Hour of day:** Numerical variable from 0 to 23, where 0 represents midnight and 23 represents 11 PM.
+- **Day of week:** Categorical variable with seven levels from Monday to Sunday.
+- **Season:** Categorical variable with four levels: Winter, Spring, Summer, and Fall.
+
+# Summary Statistics
+
+## Basic Summary of Hour
+
+```{r hour-summary}
+summary(noise_data$hour)
+```
+
+## Complaints by Day of Week
+
+```{r weekday-summary}
+complaints_by_day <- noise_data %>%
+  count(day_of_week, name = "count")
+
+complaints_by_day %>%
+  kable(caption = "Complaint Counts by Day of Week")
+```
+
+## Complaints by Season
+
+```{r season-summary}
+complaints_by_season <- noise_data %>%
+  count(season, name = "count")
+
+complaints_by_season %>%
+  kable(caption = "Complaint Counts by Season")
+```
+
+## Complaint Descriptor Counts
+
+```{r descriptor-summary}
+noise_data %>%
+  count(`Problem Detail (formerly Descriptor)`, sort = TRUE) %>%
+  mutate(percent = round(100 * n / sum(n), 2)) %>%
+  kable(caption = "Complaint Descriptors")
+```
+
+# Data Visualizations
+
+## Complaint Counts by Hour
+
+```{r hourly-counts}
+complaints_by_hour <- noise_data %>%
+  count(hour, name = "count") %>%
+  complete(hour = 0:23, fill = list(count = 0)) %>%
+  arrange(hour)
+
+complaints_by_hour %>%
+  kable(caption = "Complaint Counts by Hour")
+```
+
+```{r hourly-plot, fig.height=4.5, fig.width=7}
+ggplot(complaints_by_hour, aes(x = hour, y = count)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = 0:23) +
+  labs(
+    title = "Residential Noise Complaints by Hour",
+    x = "Hour of Day",
+    y = "Number of Complaints"
+  ) +
+  theme_minimal()
+```
+
+The hourly visualization shows how complaint volume changes across the full 24-hour cycle. In this dataset, complaints are especially common late at night.
+
+## Complaint Counts by Day of Week
+
+```{r weekday-plot, fig.height=4.5, fig.width=7}
+ggplot(complaints_by_day, aes(x = day_of_week, y = count)) +
+  geom_col() +
+  labs(
+    title = "Residential Noise Complaints by Day of Week",
+    x = "Day of Week",
+    y = "Number of Complaints"
+  ) +
+  theme_minimal()
+```
+
+The weekday chart shows whether complaints are evenly distributed across the week or concentrated on particular days.
+
+## Complaint Counts by Season
+
+```{r season-plot, fig.height=4.5, fig.width=7}
+ggplot(complaints_by_season, aes(x = season, y = count)) +
+  geom_col() +
+  labs(
+    title = "Residential Noise Complaints by Season",
+    x = "Season",
+    y = "Number of Complaints"
+  ) +
+  theme_minimal()
+```
+
+The seasonal chart shows whether residential noise complaint volume changes throughout the year.
+
+## Heatmap of Complaints by Day and Hour
+
+```{r heatmap, fig.height=5, fig.width=8}
+heatmap_data <- noise_data %>%
+  count(day_of_week, hour, name = "count")
+
+ggplot(heatmap_data, aes(x = hour, y = day_of_week, fill = count)) +
+  geom_tile() +
+  scale_x_continuous(breaks = 0:23) +
+  labs(
+    title = "Complaint Intensity Heatmap: Day of Week by Hour",
+    x = "Hour of Day",
+    y = "Day of Week",
+    fill = "Count"
+  ) +
+  theme_minimal()
+```
+
+The heatmap combines two important time variables: hour and day of week. Darker areas represent higher complaint intensity. This visualization is useful because it shows whether late-night complaints are concentrated on specific days.
+
+# Statistical Method
+
+Poisson regression is used because the response variable is a count: the number of complaints. The data are aggregated so that each row represents a unique combination of hour, day of week, and season.
+
+```{r model-data}
+model_data <- noise_data %>%
+  count(hour, day_of_week, season, name = "count") %>%
+  complete(
+    hour = 0:23,
+    day_of_week = factor(day_levels, levels = day_levels),
+    season = factor(season_levels, levels = season_levels),
+    fill = list(count = 0)
+  ) %>%
+  arrange(hour, day_of_week, season)
+
+model_data %>%
+  sample_n(10) %>%
+  arrange(hour, day_of_week, season) %>%
+  kable(caption = "Sample of Modeling Dataset")
+```
+
+```{r model-summary}
+model_data %>%
+  summarise(
+    Mean_Count = mean(count),
+    Median_Count = median(count),
+    SD_Count = sd(count),
+    Min_Count = min(count),
+    Max_Count = max(count)
+  ) %>%
+  kable(digits = 2, caption = "Summary Statistics for Complaint Counts")
+```
+
+# Regression Model
+
+## Hypotheses
+
+- **Null hypothesis (H0):** Hour, day of week, and season are not associated with residential noise complaint counts.
+- **Alternative hypothesis (H1):** At least one time-based variable is associated with residential noise complaint counts.
+
+## Poisson Regression Model
+
+```{r poisson-model}
+poisson_model <- glm(
+  count ~ hour + day_of_week + season,
+  family = poisson(link = "log"),
+  data = model_data
+)
+
+summary(poisson_model)
+```
+
+The model estimates the expected number of complaints for each combination of hour, day of week, and season. The `log` link means the coefficients are estimated on the log scale.
+
+# Statistical Output and Interpretation
+
+## Coefficient Table
+
+```{r coefficient-table}
+coef_table <- as.data.frame(summary(poisson_model)$coefficients)
+coef_table$Term <- rownames(coef_table)
+coef_table$Term <- gsub("day_of_week", "", coef_table$Term)
+coef_table$Term <- gsub("season", "", coef_table$Term)
+rownames(coef_table) <- NULL
+
+coef_table <- coef_table %>%
+  select(Term, Estimate, `Std. Error`, `z value`, `Pr(>|z|)`) %>%
+  mutate(
+    Rate_Ratio = exp(Estimate),
+    Percent_Change = round((Rate_Ratio - 1) * 100, 2)
+  )
+
+coef_table %>%
+  kable(
+    digits = 3,
+    caption = "Poisson Regression Output with Rate Ratios",
+    col.names = c("Term", "Estimate", "Std. Error", "z", "p", "Rate Ratio", "% Change")
+  )
+```
+
+## Interpretation of the Model
+
+The coefficient for **hour** shows how expected complaint counts change as the hour increases. Since Poisson coefficients are on the log scale, exponentiating the coefficient gives a rate ratio. A rate ratio above 1 means the expected complaint count increases; a rate ratio below 1 means it decreases.
+
+For categorical variables, Monday is the reference category for day of week, and Winter is the reference category for season. This means that the day-of-week coefficients are interpreted relative to Monday, and the season coefficients are interpreted relative to Winter.
+
+In this project, a positive coefficient means the expected number of complaints is higher for that time category, while a negative coefficient means the expected number of complaints is lower. A small p-value, usually below 0.05, suggests that the variable is statistically significant.
+
+# Model Fit
+
+Poisson regression does not use the same R-squared value as ordinary least squares regression. Instead, model fit can be evaluated using deviance. A lower residual deviance compared with the null deviance indicates that the model improves over a model with no predictors.
+
+```{r model-fit}
+model_fit <- data.frame(
+  Null_Deviance = poisson_model$null.deviance,
+  Residual_Deviance = poisson_model$deviance,
+  AIC = AIC(poisson_model)
+)
+
+model_fit %>%
+  kable(digits = 3, caption = "Model Fit Statistics")
+```
+
+## Pseudo R-squared
+
+A simple pseudo R-squared is calculated as:
+
+\[
+1 - \frac{\text{Residual Deviance}}{\text{Null Deviance}}
+\]
+
+```{r pseudo-r2}
+pseudo_r2 <- 1 - (poisson_model$deviance / poisson_model$null.deviance)
+pseudo_r2
+```
+
+This pseudo R-squared provides a rough measure of improvement over the null model. It should not be interpreted exactly the same way as ordinary least squares R-squared, but it is useful for describing how much better the model performs compared with a model that has no predictors.
+
+# Conclusion
+
+This project examined Manhattan residential noise complaints using NYC 311 data. The analysis shows that complaint counts vary by hour of day, day of week, and season. The visualizations show stronger complaint activity during late evening hours and weekends, and the Poisson regression model supports that time-based variables are associated with complaint counts.
+
+These findings are important because they can help city agencies understand when residential noise complaints are most likely to occur and plan resources more effectively. However, because the data are observational and based only on reported complaints, the results show association and do not prove causation.
+
+# Limitations
+
+This analysis has several limitations:
+
+- The data are observational, so the analysis can identify associations but cannot prove causation.
+- The dataset includes only reported complaints, not all actual noise incidents.
+- Reporting behavior may vary by neighborhood, resident awareness, and access to 311 services.
+- Other factors such as holidays, weather, local events, housing density, and police staffing were not included in the model.
+- Complaint counts may reflect both actual noise conditions and the likelihood that residents choose to report those conditions.
+
+# References
+
+- NYC Open Data. 311 Service Requests from 2010 to Present. https://data.cityofnewyork.us/Social-Services/311-Service-Requests-from-2010-to-Present/erm2-nwe9
